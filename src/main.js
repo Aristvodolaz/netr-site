@@ -1,10 +1,11 @@
 // Constants
+const API_BASE = window.location.hostname === 'localhost' ? '/api' : 'http://10.171.12.36:3005';
 const API = {
-    TASKS: '/api/distinctName',
-    HIDE_TASK: '/api/hideTask',
-    UPLOAD_WPS: '/api/uploadWPS',
-    UPLOAD_DATA: '/api/uploadData',
-    DOWNLOAD_DATA: '/api/downloadData'
+    TASKS: `${API_BASE}/distinctName`,
+    HIDE_TASK: `${API_BASE}/hideTask`,
+    UPLOAD_WPS: `${API_BASE}/uploadWPS`,
+    UPLOAD_DATA: `${API_BASE}/uploadData`,
+    DOWNLOAD_DATA: `${API_BASE}/downloadData`
 };
 
 // State Management
