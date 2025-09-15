@@ -9,7 +9,20 @@ export default defineConfig({
         target: 'http://10.171.12.36:3005',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
+      },
+      '/downloadData': {
+        target: 'http://10.171.12.36:3005',
+        changeOrigin: true
+      },
+      '/uploadWPS': {
+        target: 'http://10.171.12.36:3005',
+        changeOrigin: true
+      },
+      '/hideTask': {
+        target: 'http://10.171.12.36:3005',
+        changeOrigin: true
       }
+      
     }
   }
 });

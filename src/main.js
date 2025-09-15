@@ -1,10 +1,10 @@
 const API_BASE = '/api'
 const API = {
-  TASKS: `${API_BASE}/distinctName`,
-  HIDE_TASK: `${API_BASE}/hideTask`,
-  UPLOAD_WPS: `${API_BASE}/uploadWPS`,
-  UPLOAD_DATA: `${API_BASE}/uploadData`,
-  DOWNLOAD_DATA: `${API_BASE}/downloadData`
+   TASKS: `${API_BASE}/distinctName`,
+   HIDE_TASK: '/hideTask',
+   UPLOAD_WPS: '/uploadWPS',  // Direct endpoint without /api prefix
+   UPLOAD_DATA: `${API_BASE}/uploadData`,
+   DOWNLOAD_DATA: '/downloadData' // This endpoint doesn't use /api prefix
 }
 
 // State Management
@@ -206,9 +206,6 @@ const fetchTasks = async () => {
 
 const hideTask = async (taskName) => {
     try {
-        const confirmed = await showConfirm(`Вы действительно хотите скрыть задание "${taskName}"?`);
-        if (!confirmed) return;
-
         const response = await fetch(API.HIDE_TASK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -232,35 +229,113 @@ const hideTask = async (taskName) => {
 // File Upload
 const uploadFile = async (file, isWps = false) => {
     try {
-        // Create abort controller for cancellation
         state.uploadController = new AbortController();
-        
-        const formData = new FormData();
-        formData.append('file', file);
-        
         showProgress();
-        
-        const response = await fetch(isWps ? API.UPLOAD_WPS : API.UPLOAD_DATA, {
-            method: 'POST',
-            body: formData,
-            signal: state.uploadController.signal,
-            onUploadProgress: (progressEvent) => {
-                const percentage = (progressEvent.loaded / progressEvent.total) * 100;
-                updateProgress(percentage);
-            }
+
+        // Read Excel file
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+                    resolve(jsonData);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
         });
-        
-        if (!response.ok) throw new Error('Upload failed');
-        
+
+        if (!data || data.length === 0) {
+            throw new Error('Файл пустой');
+        }
+
+        const totalRows = data.length;
+        let processedRows = 0;
+
+        // Get prefix from filename
+        const pref = file.name.split(' ')[0];
+
+        // Process each row
+        for (const row of data) {
+            if (state.uploadController.signal.aborted) {
+                throw new Error('AbortError');
+            }
+
+            const payload = isWps ? {
+                'nazvanie_zdaniya': row['Название задания'] || '',
+                'artikul': row['Артикул'] || '',
+                'shk': String(row['Штрих-код'] || '').replace('.0', ''),
+                'mesto': row['Место'] || '',
+                'vlozhennost': row['Вложенность'] || '',
+                'pallet': row['Паллет'] || '',
+                'size_vps': row['Размер ВПС'] || '',
+                'vp': row['ВП'] || '',
+                'itog_zakaza': row['Итог заказа'],
+                'shk_wps': String(row['ШК ВПС'] || '')
+            } : {
+                'Artikul': row['Артикул'] || '',
+                'Nazvanie_Tovara': row['Название товара'] || '',
+                'SHK': row['ШК'] || '',
+                'Nomenklatura': row['Номенклатура'] || '',
+                'Itog_Zakaz': row['Итог Заказ'],
+                'Srok_Godnosti': row['Срок Годности'] || '',
+                'pref': pref,
+                'Status': 0,
+                'Status_Zadaniya': 0,
+                'Nazvanie_Zadaniya': file.name,
+                'vp': row['ВП'] || ''
+            };
+
+            // Clean null/undefined values
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === null || payload[key] === undefined) {
+                    payload[key] = '';
+                }
+            });
+
+            let success = false;
+            let retries = 0;
+            const maxRetries = 3;
+
+            while (!success && retries < maxRetries) {
+                try {
+                    const response = await fetch(isWps ? API.UPLOAD_WPS : API.UPLOAD_DATA, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                        signal: state.uploadController.signal
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    success = true;
+                } catch (error) {
+                    retries++;
+                    if (retries === maxRetries) throw error;
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+                }
+            }
+
+            processedRows++;
+            updateProgress((processedRows / totalRows) * 100);
+        }
+
         hideProgress();
         showToast('Файл успешно загружен');
         await fetchTasks();
     } catch (error) {
-        if (error.name === 'AbortError') {
+        if (error.name === 'AbortError' || error.message === 'AbortError') {
             showToast('Загрузка отменена', 'error');
         } else {
             console.error('Error uploading file:', error);
-            showToast('Ошибка при загрузке файла', 'error');
+            showToast('Ошибка при загрузке файла: ' + error.message, 'error');
         }
         hideProgress();
     }
@@ -408,14 +483,15 @@ elements.downloadTaskBtn.addEventListener('click', async () => {
                 'Вложенность': row.vlozhennost ?? '',
                 'Паллет': row.pallet ?? '',
                 'ШК ВПС': row.shk_wps ?? '',
-                'Размер ВП': row.size_vps ?? '',
+                'Размер ВПС': row.size_vps ?? '',
                 'ВП': row.vp ?? '',
                 'Итог заказа': row.itog_zakaza ?? '',
                 'Срок годности': row.srok_godnosti ?? '',
                 'Название товара': row.nazvanie_tovara ?? '',
                 'Номенклатура': row.Nomenklatura ?? '',
                 'Расхождение заказ/упаковано': itogZakaza - vlozhennost,
-                'Расхождение ВП/упаковано': sizeVps - vlozhennost
+                'Расхождение ВП/упаковано': sizeVps - vlozhennost,
+                'Название задания': row.nazvanie_zdaniya ?? ''
             };
         });
         const ws = XLSX.utils.json_to_sheet(rows);
@@ -447,7 +523,9 @@ elements.downloadTaskBtn.addEventListener('click', async () => {
             { wch: 30 }, // Название товара
             { wch: 20 }, // Номенклатура
             { wch: 25 }, // Расхождение заказ/упаковано
+            { wch: 25 },  // Расхождение ВП/упаковано
             { wch: 25 }  // Расхождение ВП/упаковано
+
         ];
         ws['!cols'] = colWidths;
         
