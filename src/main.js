@@ -378,6 +378,47 @@ const showConfirm = (message) => {
     });
 };
 
+// Функция для расчета расхождений по артикулам
+const calculateArtikulDiscrepancies = (data) => {
+    // Группируем данные по артикулу
+    const artikulGroups = {};
+    
+    data.forEach(row => {
+        const artikul = row.artikul || '';
+        if (!artikulGroups[artikul]) {
+            artikulGroups[artikul] = {
+                artikul: artikul,
+                nazvanie_tovara: row.nazvanie_tovara || '',
+                itog_zakaza: 0,
+                vlozhennost: 0,
+                size_vps: 0
+            };
+        }
+        
+        // Суммируем значения для каждого артикула
+        artikulGroups[artikul].itog_zakaza += Number(row.itog_zakaza) || 0;
+        artikulGroups[artikul].vlozhennost += Number(row.vlozhennost) || 0;
+        artikulGroups[artikul].size_vps += Number(row.size_vps) || 0;
+    });
+    
+    // Преобразуем в массив и рассчитываем расхождения
+    return Object.values(artikulGroups).map(group => {
+        const itogZakaza = group.itog_zakaza;
+        const vlozhennost = group.vlozhennost;
+        const sizeVps = group.size_vps;
+        
+        return {
+            'Артикул': group.artikul,
+            'Название товара': group.nazvanie_tovara,
+            'Итог заказа': itogZakaza,
+            'Вложенность': vlozhennost,
+            'Размер ВПС': sizeVps,
+            'Расхождение заказ/упаковано': itogZakaza - vlozhennost,
+            'Расхождение ВП/упаковано': sizeVps - vlozhennost
+        };
+    });
+};
+
 // Event Listeners
 elements.searchInput.addEventListener('input', debounce((e) => {
     const searchText = e.target.value.toLowerCase();
@@ -473,10 +514,9 @@ elements.downloadTaskBtn.addEventListener('click', async () => {
 
         // Сформировать Excel на клиенте с помощью SheetJS
         const wb = XLSX.utils.book_new();
+        
+        // Основной лист без расчетов расхождений
         const rows = data.data.map(row => {
-            const itogZakaza = Number(row.itog_zakaza) || 0;
-            const vlozhennost = Number(row.vlozhennost) || 0;
-            const sizeVps = Number(row.size_vps) || 0;
             return {
                 'Артикул': row.artikul ?? '',
                 'Штрих-код': row.shk ?? '',
@@ -489,8 +529,6 @@ elements.downloadTaskBtn.addEventListener('click', async () => {
                 'Срок годности': row.srok_godnosti ?? '',
                 'Название товара': row.nazvanie_tovara ?? '',
                 'Номенклатура': row.Nomenklatura ?? '',
-                'Расхождение заказ/упаковано': itogZakaza - vlozhennost,
-                'Расхождение ВП/упаковано': sizeVps - vlozhennost,
                 'Название задания': row.nazvanie_zdaniya ?? ''
             };
         });
@@ -516,16 +554,13 @@ elements.downloadTaskBtn.addEventListener('click', async () => {
             { wch: 12 }, // Вложенность
             { wch: 12 }, // Паллет
             { wch: 15 }, // ШК ВПС
-            { wch: 12 }, // Размер ВП
+            { wch: 12 }, // Размер ВПС
             { wch: 8 },  // ВП
             { wch: 12 }, // Итог заказа
             { wch: 15 }, // Срок годности
             { wch: 30 }, // Название товара
             { wch: 20 }, // Номенклатура
-            { wch: 25 }, // Расхождение заказ/упаковано
-            { wch: 25 },  // Расхождение ВП/упаковано
-            { wch: 25 }  // Расхождение ВП/упаковано
-
+            { wch: 25 }  // Название задания
         ];
         ws['!cols'] = colWidths;
         
@@ -545,7 +580,52 @@ elements.downloadTaskBtn.addEventListener('click', async () => {
         if (!ws['!rows']) ws['!rows'] = [];
         ws['!rows'][0] = { hpt: 20, s: { font: { bold: true } } };
         
+        // Создание листа с расчетами по артикулам
+        const artikulCalculations = calculateArtikulDiscrepancies(data.data);
+        const wsCalculations = XLSX.utils.json_to_sheet(artikulCalculations);
+        
+        // Настройка стилей для листа расчетов
+        const calcRange = XLSX.utils.decode_range(wsCalculations['!ref']);
+        for (let row = calcRange.s.r; row <= calcRange.e.r; row++) {
+            for (let col = calcRange.s.c; col <= calcRange.e.c; col++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                if (wsCalculations[cellAddress]) {
+                    if (!wsCalculations[cellAddress].s) wsCalculations[cellAddress].s = {};
+                    if (!wsCalculations[cellAddress].s.font) wsCalculations[cellAddress].s.font = {};
+                    wsCalculations[cellAddress].s.font.size = 12;
+                }
+            }
+        }
+        
+        // Настройка ширины колонок для листа расчетов
+        const calcColWidths = [
+            { wch: 15 }, // Артикул
+            { wch: 30 }, // Название товара
+            { wch: 12 }, // Итог заказа
+            { wch: 12 }, // Вложенность
+            { wch: 12 }, // Размер ВПС
+            { wch: 25 }, // Расхождение заказ/упаковано
+            { wch: 25 }  // Расхождение ВП/упаковано
+        ];
+        wsCalculations['!cols'] = calcColWidths;
+        
+        // Стилизация заголовков для листа расчетов
+        for (let col = calcRange.s.c; col <= calcRange.e.c; col++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+            if (wsCalculations[cellAddress]) {
+                wsCalculations[cellAddress].s = { 
+                    font: { bold: true, size: 12, color: { rgb: '000000' }},
+                    alignment: { horizontal: 'center', vertical: 'center' }
+                };
+            }
+        }
+        
+        // Настройка высоты строки заголовка для листа расчетов
+        if (!wsCalculations['!rows']) wsCalculations['!rows'] = [];
+        wsCalculations['!rows'][0] = { hpt: 20, s: { font: { bold: true } } };
+        
         XLSX.utils.book_append_sheet(wb, ws, 'Задание');
+        XLSX.utils.book_append_sheet(wb, wsCalculations, 'Расчеты по артикулам');
         XLSX.writeFile(wb, `${state.selectedTask}.xlsx`);
         
         showToast('Файл успешно сформирован');
