@@ -1,3 +1,5 @@
+import * as XLSX from 'xlsx';
+
 const API_BASE = '/api'
 const API = {
    TASKS: `${API_BASE}/distinctName`,
